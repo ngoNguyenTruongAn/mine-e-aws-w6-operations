@@ -57,7 +57,7 @@ aws s3 cp .\mh5-bulk-strong s3://media-s3-minie-mh5-055255093740/products/mh5-bu
 > **Region:** `ap-southeast-1` (Singapore)  
 > **Environment:** `dev`  
 > **Workload:** ECS Fargate Backend + RDS MySQL + ALB + S3  
-> **Note:** File này bắt đầu từ **MH-COST-A**. Phần **MH-COST-V** tạm bỏ qua/chưa hoàn thiện do giới hạn quyền payer account.
+
 
 ---
 # MH-COST-V — Cost Visibility & Attribution
@@ -697,20 +697,129 @@ ECS UpdateService desiredCount=0
 + SNS topic ARN: arn:aws:sns:ap-southeast-1:055255093740:sns-minie-cost-guard-w6
 ![Budget notification](./Evidence/Budget%20notification.jpg)
 ## Test Budget notification tới SNS
-- Bật lại ECS 
-- Vào: SNS → Topics → sns-minie-cost-guard-w6 → Publish message
-- Message body:
+
+## Mục tiêu
+
+Kiểm chứng đường đi cost-driven path:
+
+```text
+AWS Budget Mine-e-W6-150USD
+        ↓
+SNS topic sns-minie-cost-guard-w6
+        ↓
+Lambda Cost Guard lambda-minie-cost-guard-w6
+        ↓
+ECS UpdateService desiredCount=0
+```
+
+Vì AWS Budget chỉ tự trigger khi actual cost vượt threshold, nhóm dùng SNS test message để mô phỏng Budget alert và kiểm chứng rằng SNS có thể invoke Lambda Cost Guard.
+
+---
+
+## Thực hiện test
+
+Trước khi test, nhóm bật lại ECS Service để có thể quan sát việc Lambda scale down service sau khi SNS message được publish.
+
+Vào:
+
+```text
+SNS
+→ Topics
+→ sns-minie-cost-guard-w6
+→ Publish message
+```
+
+Message body:
+
+```json
 {
   "source": "aws.budgets",
   "budgetName": "Mine-e-W6-150USD",
   "threshold": "80",
   "message": "Test Budget alert to trigger Mine-e Cost Guard"
 }
-- Sau đó check: Lambda → Monitor → View CloudWatch logs
+```
+
+Sau đó kiểm tra Lambda logs:
+
+```text
+Lambda
+→ lambda-minie-cost-guard-w6
+→ Monitor
+→ View CloudWatch logs
+```
+
+Evidence Lambda được invoke bởi SNS test message:
+
+
 ![Budget notification SNS](./Evidence/Budget%20notification%20SNS.jpg)
-- ECS đã tắt:
+
+
+Sau khi SNS invoke Lambda Cost Guard, ECS Service được scale down về `desiredCount=0`.
+
+Evidence ECS đã tắt:
+
+
 ![ECS Budget notification](./Evidence/ECS%20Budget%20notification.jpg)
-**Vì Budget chỉ tự trigger khi actual cost vượt threshold, nhóm em dùng SNS test message để kiểm chứng đường đi Budget notification path. SNS đã invoke Lambda Cost Guard, Lambda gọi ECS UpdateService để scale down service về desiredCount=0**
+
+
+---
+
+## Latency ADR — AWS Budget cost data delay
+
+AWS Budgets dựa trên billing/cost data nên không phản ứng realtime. Dữ liệu chi phí có thể bị trễ khoảng 8–24 giờ trước khi Budget evaluation phản ánh chi phí mới phát sinh.
+
+Vì W6 là môi trường workshop ngắn hạn, cost-driven trigger thật có thể chưa tự fire trong thời gian demo, ngay cả khi Budget, SNS và Lambda đã được cấu hình đúng.
+
+Do đó, nhóm kiểm chứng đường đi Budget notification path bằng cách publish test message vào SNS topic `sns-minie-cost-guard-w6`. Test message này mô phỏng một Budget alert vượt ngưỡng 80%.
+
+Kết quả test chứng minh:
+
+```text
+1. SNS topic sns-minie-cost-guard-w6 nhận được test message.
+2. SNS invoke Lambda Cost Guard.
+3. Lambda gọi ECS UpdateService.
+4. ECS Service minie-backend-task-w6-service được scale down về desiredCount=0.
+```
+
+---
+
+## Production behavior
+
+Trong môi trường production, nhóm sẽ không cần publish test message thủ công. Khi actual cost vượt threshold đã cấu hình, AWS Budget sẽ gửi notification thật tới SNS.
+
+Luồng production sẽ là:
+
+```text
+Actual cost vượt threshold
+        ↓
+AWS Budget evaluation phát hiện vượt ngưỡng
+        ↓
+Budget gửi notification tới SNS
+        ↓
+SNS invoke Lambda Cost Guard
+        ↓
+Lambda scale down hoặc stop resource dev/non-critical
+        ↓
+CloudTrail ghi nhận remediation action
+```
+
+Do billing data có độ trễ, control này phù hợp để xử lý cost overrun theo chu kỳ daily/hourly, không phù hợp cho phản ứng realtime theo từng request.
+
+---
+
+## Kết luận
+
+SNS test message đã kiểm chứng thành công wiring của cost-driven path:
+
+```text
+Budget → SNS → Lambda Cost Guard → ECS UpdateService
+```
+
+Kết quả cho thấy SNS đã invoke Lambda Cost Guard, Lambda gọi ECS `UpdateService`, và ECS Service được scale down về `desiredCount=0`.
+
+Vì vậy, MH-COST-A không chỉ có scheduled cost guard bằng EventBridge, mà còn có cost-driven path được cấu hình và kiểm chứng bằng SNS publish test.
+
 # Kết luận MH-COST-A
 
 Nhóm đã triển khai automation giảm cost cho workload Mine-e bằng Lambda Cost Guard. Automation gọi ECS `UpdateService` để set ECS Service `desiredCount=0`.
@@ -845,6 +954,25 @@ Có alarm thật
 + MineE/Media → MediaUploadCount
 + MineE/Media → MediaUploadBytes
 ![CloudWatch Dashboard](./Evidence/CloudWatch%20Dashboard.jpg)
+**Bổ sung**:
+- Vào CloudWatch → Dashboards → dashboard-minie-w6-obs
+- Bấm: + Add widget
+- Chọn: Data source: CloudWatch
+- Data type: Metrics
+- Widget type: Line
+- Sau đó chọn: Browse → AWS namespaces → Lambda → By Function Name
+- Tìm function: lambda-minie-media-obs-w6
+- Tick metric: Duration, Error
+- Bấm Create
+![CloudWatch Dashboard-2](./Evidence/CloudWatch%20Dashboard-2.jpg)
+## Test CloudWatch Dashboard
+- Quay lại S3 upload thêm 1 file vào: media-s3-minie-w6/products/
+![Test CloudWatch Dashboard-2](./Evidence/Test%20CloudWatch%20Dashboard-2.jpg)
+- Đợi khoảng 1–2 phút.
+- Refresh dashboard.
+- Chọn time range 1h.
+- Bấm Save dashboard.
+![Test CloudWatch Dashboard-3](./Evidence/Test%20CloudWatch%20Dashboard-3.jpg)
 ## MH-OBS 12 — Tạo CloudWatch Alarm
 - Từ metric MediaUploadCount, tạo alarm:
 - Cấu hình:
@@ -871,11 +999,14 @@ fields @timestamp, @message
 | limit 20
 
 **Processing media object → Lambda đã nhận S3 event và xử lý object upload:**
-![Processing media object](./Evidence/Processing%20media%20object.jpgt)
+![Processing media object](./Evidence/Processing%20media%20object.jpg)
 **DynamoDB PutItem completed → Lambda đã ghi metadata vào DynamoDB:**
 ![DynamoDB PutItem completed](./Evidence/DynamoDB%20PutItem%20completed.jpg)
 **CloudWatch custom metrics published → Lambda đã publish custom metric lên CloudWatch:**
 ![CloudWatch custom metrics published](./Evidence/CloudWatch%20custom%20metrics%20published.jpg)
+
+## Save Logs Insights query name
+![Save Logs Insights query name](./Evidence/Save%20Logs%20Insights%20query%20name.jpg)
 ---
 
 # Kết luận MH-OBS
@@ -1017,8 +1148,88 @@ Role: mh-sec-s3-lambda-role
 - Log ở CloudWatch lambda:
 ![CloudWatch lambda MH-Sec](./Evidence/CloudWatch%20lambda%20MH-Sec.jpg)
 **Ý nghĩa:EventBridge Schedule đã invoke Lambda Security Guard. Lambda kiểm tra bucket media-s3-minie-w6 và xác nhận bucket đang compliant, nên không cần remediation thêm.**
+# MH-SEC Supporting Preventive Control — S3 Account-level BPA + Deny Non-TLS Policy
+
+## Mục tiêu
+
+Ngoài vòng lặp self-healing security guard đã triển khai bằng Lambda, nhóm bổ sung một preventive control để giảm rủi ro S3 bucket bị public hoặc bị truy cập qua kết nối không an toàn.
+
+Preventive control được chọn:
+
+```text
+S3 Account-level Block Public Access
++
+Bucket policy deny non-TLS request
+```
+Control này bổ sung cho Lambda Security Guard như sau:
++ Preventive control: Ngăn rủi ro xảy ra hoặc giảm khả năng cấu hình sai.
++ Self-healing control: Tự phát hiện và sửa lỗi nếu misconfiguration đã xảy ra.
+## Vì sao chọn preventive control này
+- Mine-e sử dụng S3 bucket media-s3-minie-w6 để lưu media/image của sản phẩm. Nếu bucket bị cấu hình public hoặc cho phép request không dùng TLS, dữ liệu media có thể bị truy cập ngoài ý muốn hoặc truyền qua kênh không an toàn.
+- Vì vậy nhóm bổ sung:
+```text
+1. S3 Account-level Block Public Access
+   → Giảm rủi ro public access ở cấp account.
+
+2. Bucket policy deny non-TLS
+   → Từ chối request không dùng HTTPS/TLS.
+```
+## Kiến trúc control
+```text
+User / Client request tới S3 bucket
+        ↓
+S3 bucket policy kiểm tra aws:SecureTransport
+        ↓
+Nếu request không dùng TLS
+        ↓
+Deny request
+```
+- Song song đó:
+```text
+S3 Account-level Block Public Access
+        ↓
+Áp dụng guardrail ở cấp account
+        ↓
+Giảm rủi ro bucket/object bị public do ACL hoặc bucket policy
+```
+## MH-SEC-PC-1 — S3 Account-level Block Public Access
+- Bật Block Public Access ở cấp account để giảm rủi ro các bucket trong account bị cấu hình public ngoài ý muốn
+![S3 Account-level Block Public Access](./Evidence/S3%20Account-level%20Block%20Public%20Access.jpg)
+## MH-SEC-PC-2 — Bucket policy deny non-TLS
+- Thêm bucket policy vào media-s3-minie-w6 để từ chối mọi request không dùng HTTPS/TLS.
+- Bucket policy:
+![Bucket policy](./Evidence/Bucket%20policy.jpg)
+## MH-SEC-PC-3 — Test deny non-TLS request
+## Mục tiêu
+
+Chứng minh bucket policy `DenyNonTLSRequests` hoạt động đúng bằng cách kiểm thử hai trường hợp:
+
+```text
+1. Request dùng HTTP / non-TLS  → bị deny
+2. Request dùng HTTPS / TLS     → được allow
+```
+## Test 1 — Gửi request non-TLS qua HTTP endpoint
+- Nhóm sử dụng AWS CLI và ép request tới S3 đi qua HTTP endpoint bằng tham số --endpoint-url.
+- Command test non-TLS: aws s3 ls s3://media-s3-minie-w6 --region ap-southeast-1 --endpoint-url http://s3.ap-southeast-1.amazonaws.com
+**Kết quả**:
+![request non-TLS qua HTTP](./Evidence/request%20non-TLS%20qua%20HTTP.jpg)
+**Ý nghĩa**:
+- Request đi qua HTTP nên điều kiện aws:SecureTransport=false được match.
+- Bucket policy DenyNonTLSRequests đã explicit deny request này.
+## Test 2 — Gửi request TLS/HTTPS bình thường
+- Sau đó nhóm chạy lại lệnh AWS CLI bình thường, không ép HTTP endpoint
+- Command test TLS: aws s3 ls s3://media-s3-minie-w6 --region ap-southeast-1
+**Kết quả**:
+![request TLS/HTTPS bình thường](./Evidence/request%20TLS-HTTPS.jpg)
+**Ý nghĩa:**
+- Request HTTPS không bị deny.
+- Điều này chứng minh policy chỉ chặn request non-TLS, không chặn request hợp lệ dùng TLS.
+
+
+
 # Kết luận MH-SEC
 - Trong MH-SEC, nhóm đã triển khai **Self-Healing Security Guard** cho S3 media bucket của Mine-e: `media-s3-minie-w6`.
 - Nhóm cố ý tạo một security misconfiguration bằng cách tắt **Block Public Access** trên bucket. Sau đó, Lambda `lambda-minie-s3-security-guard-w6` được dùng để kiểm tra trạng thái Public Access Block của bucket và tự động bật lại
 **Security-cost statement: Security Guard sử dụng Lambda và EventBridge nên chi phí vận hành thấp, vì Lambda chỉ chạy khi được trigger hoặc theo lịch. Tuy nhiên, control này giúp giảm rủi ro lớn liên quan đến việc S3 bucket bị public ngoài ý muốn. Với Mine-e, media bucket chứa ảnh sản phẩm nên việc tự động bật lại Block Public Access là một biện pháp bảo vệ phù hợp, chi phí thấp nhưng giá trị bảo mật cao.**
 
+---
