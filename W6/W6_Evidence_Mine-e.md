@@ -60,6 +60,130 @@ aws s3 cp .\mh5-bulk-strong s3://media-s3-minie-mh5-055255093740/products/mh5-bu
 
 
 ---
+# Project Recap
+
+## 1. Giới thiệu dự án
+
+Mine-e là một ứng dụng thương mại điện tử. Ứng dụng cho phép người dùng truy cập frontend, xem dữ liệu sản phẩm và sử dụng backend API để xử lý các chức năng nghiệp vụ liên quan đến sản phẩm, người dùng và media/image sản phẩm.
+
+Trong W6, nhóm redeploy workload chính của Mine-e lên AWS và bổ sung các lớp vận hành để chứng minh hệ thống không chỉ chạy được, mà còn có thể:
+
+```text
+- Theo dõi và phân bổ chi phí theo workload.
+- Tự động hành động để giảm chi phí.
+- Quan sát được trạng thái ứng dụng bằng logs, metrics, dashboard và alarm.
+- Tự động sửa một security misconfiguration trên S3.
+```
+
+---
+
+## 2. Business domain
+
+Business domain của Mine-e là **E-commerce**. Các thành phần nghiệp vụ chính gồm:
+
+```text
+Product catalog
+Product media/images
+Backend API
+Database lưu dữ liệu ứng dụng
+Frontend cho người dùng truy cập
+```
+
+Vì Mine-e có dữ liệu sản phẩm và ảnh sản phẩm, nhóm chọn **media workflow** làm use case chính cho monitoring:
+
+```text
+Upload ảnh vào S3
+        ↓
+Lambda xử lý metadata
+        ↓
+Ghi metadata vào DynamoDB
+        ↓
+Publish custom metrics lên CloudWatch
+```
+
+Luồng này phù hợp với domain thương mại điện tử vì ảnh sản phẩm là một phần quan trọng của ứng dụng.
+
+---
+
+## 3. Kiến trúc chính của Mine-e W6
+
+Workload Mine-e W6 gồm các thành phần chính:
+
+```text
+Frontend:
+S3 static website bucket minie-fe-w6
+
+Backend:
+ECS Fargate Service minie-backend-task-w6-service
+
+Entry point:
+Application Load Balancer
+
+Database:
+RDS MySQL
+
+Media storage:
+S3 bucket media-s3-minie-w6
+
+Observability:
+S3 Event → Lambda → DynamoDB → CloudWatch
+
+Cost automation:
+Lambda Cost Guard + EventBridge Scheduler + SNS/Budget path
+
+Security automation:
+Lambda S3 Security Guard + EventBridge Scheduler + CloudTrail
+
+Preventive security control:
+S3 Account-level Block Public Access + bucket policy deny non-TLS
+```
+
+Luồng truy cập chính:
+
+```text
+User
+  ↓
+S3 static frontend
+  ↓
+Application Load Balancer
+  ↓
+ECS Fargate backend
+  ↓
+RDS MySQL
+```
+
+Luồng media/observability:
+
+```text
+S3 media upload
+  ↓
+Lambda media observability
+  ↓
+DynamoDB metadata table
+  ↓
+CloudWatch logs, custom metrics, dashboard, alarm
+```
+
+---
+## 4. Các quyết định cost-aware trong W6
+
+W6 có hard cost cap `$150`, nên nhóm ưu tiên cấu hình tiết kiệm chi phí nhưng vẫn đủ để chứng minh các control vận hành.
+
+Các quyết định cost-aware gồm:
+
+```text
+RDS Single-AZ thay vì Multi-AZ
+ECS desired task count = 1
+Lambda Cost Guard scale ECS desiredCount về 0 khi cần
+Không redeploy Redis/EFS/Network Firewall nếu không phục vụ trực tiếp cho W6
+Dùng Lambda, EventBridge và SNS cho automation chi phí thấp
+Dùng S3 Static Website endpoint làm fallback khi CloudFront bị account verification chặn
+```
+
+Nhóm không sử dụng AWS Network Firewall trong W6 vì W6 không chấm lại network hardening của W5. Tuần này tập trung vào cost visibility, cost control, monitoring và self-healing security. Network Firewall không bắt buộc cho 4 must-have W6 và có thể làm tăng chi phí trong account có hard cap `$150`.
+
+---
+
 # MH-COST-V — Cost Visibility & Attribution
 
 ## Mục tiêu
