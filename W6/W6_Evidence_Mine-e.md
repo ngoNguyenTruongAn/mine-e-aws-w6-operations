@@ -49,6 +49,11 @@ aws s3 cp .\mh5-bulk-strong s3://media-s3-minie-mh5-055255093740/products/mh5-bu
 ## Kiểm tra DynamoDB
 ![DynamoDB Reserved Concurrency](./Evidence/DynamoDB%20Reserved%20Concurrency.jpg)
 
+## 2 Feedback Bonus: bổ sung ảnh trạng thái khôi phục route 
+- Gắn lại RT:
+![Gắn lại RT](./Evidence/Gắn%20lại%20RT.jpg)
+- Reachable:
+![Reachable](./Evidence/Reachable.jpg)
 
 
 #  Evidence Pack — W6 Mine-e AWS Operations
