@@ -1357,3 +1357,48 @@ Chứng minh bucket policy `DenyNonTLSRequests` hoạt động đúng bằng cá
 **Security-cost statement: Security Guard sử dụng Lambda và EventBridge nên chi phí vận hành thấp, vì Lambda chỉ chạy khi được trigger hoặc theo lịch. Tuy nhiên, control này giúp giảm rủi ro lớn liên quan đến việc S3 bucket bị public ngoài ý muốn. Với Mine-e, media bucket chứa ảnh sản phẩm nên việc tự động bật lại Block Public Access là một biện pháp bảo vệ phù hợp, chi phí thấp nhưng giá trị bảo mật cao.**
 
 ---
+
+# Bonus — Wasteful → Changed Reflection
+
+Trong stack Mine-e W6, nhóm phát hiện ECS Fargate backend đang được cấp tài nguyên cao hơn mức sử dụng thực tế. Task definition `minie-backend-task-w6:5` ban đầu dùng `1,024 CPU units (1 vCPU)` và `2,048 MiB (2 GiB)` memory. Tuy nhiên, CloudWatch ECS metrics trong thời gian test cho thấy `CPUUtilization` cao nhất chỉ khoảng `2.65%`, còn `MemoryUtilization` dao động khoảng `1.56%` đến `2.60%`. Vì backend chỉ phục vụ môi trường dev/demo, cấu hình này gây lãng phí Fargate compute.
+
+Nhóm đã right-size task definition xuống `512 CPU units (0.5 vCPU)` và `1,024 MiB (1 GiB)` memory, sau đó deploy revision mới cho service `minie-backend-task-w6-service`. Resource delta là CPU giảm `50%` và memory giảm `50%`. Sau khi deploy, ECS task vẫn chạy ổn định, nên thay đổi giúp giảm tài nguyên cấp phát mà không ảnh hưởng chức năng demo.
+
+## Evidence
+
+### Before — ECS task size trước khi right-sizing
+
+Task definition ban đầu:
+
+```text
+Task definition: minie-backend-task-w6:5
+Task CPU: 1,024 units = 1 vCPU
+Task memory: 2,048 MiB = 2 GiB
+```
+![Task definition ban đầu](./Evidence/Task%20definition%20ban%20đầu.jpg)
+## CloudWatch utilization metrics
+- CloudWatch ECS metrics cho thấy workload backend sử dụng rất thấp so với tài nguyên đã cấp:
+```text
+Peak CPUUtilization: ~2.65%
+MemoryUtilization: ~1.56% - 2.60%
+```
+![CloudWatch utilization metrics](./Evidence/CloudWatch%20utilization%20metrics.jpg)
+## After — ECS task size sau khi right-sizing
+- Task definition sau khi tối ưu:
+```text
+Task CPU: 512 units = 0.5 vCPU
+Task memory: 1,024 MiB = 1 GiB
+- Resource delta:
+CPU: 1 vCPU → 0.5 vCPU = giảm 50%
+Memory: 2 GiB → 1 GiB = giảm 50%
+```
+![ECS task right-sizing](./Evidence/ECS%20task%20right-sizing.jpg)
+## Deployment sau khi right-sizing
+![Deployment right-sizing](./Evidence/Deployment%20right-sizing.jpg)
+### CloudWatch metrics sau khi right-sizing
+![CloudWatch right-sizing](./Evidence/CloudWatch%20right-sizing.jpg)
+**Ý nghĩa:Sau khi giảm task size xuống 0.5 vCPU / 1 GiB, backend vẫn chỉ dùng khoảng 5.2% memory và gần 0.02% CPU trong lúc test.Điều này chứng minh cấu hình mới vẫn còn headroom và không bị thiếu tài nguyên.**
+## Kết luận Wasteful → Changed Reflection
+**Trong stack Mine-e W6, nhóm phát hiện ECS Fargate backend đang được cấp tài nguyên cao hơn mức sử dụng thực tế. Task definition `minie-backend-task-w6:5` ban đầu dùng `1,024 CPU units (1 vCPU)` và `2,048 MiB (2 GiB)` memory. Tuy nhiên, CloudWatch ECS metrics trong thời gian test cho thấy `CPUUtilization` cao nhất chỉ khoảng `2.65%`, còn `MemoryUtilization` chỉ khoảng `2.60%`.**
+
+**Nhóm đã right-size task definition xuống `512 CPU units (0.5 vCPU)` và `1,024 MiB (1 GiB)` memory, rồi deploy revision mới cho service `minie-backend-task-w6-service`. Delta cụ thể là CPU giảm `50%` và memory giảm `50%`. Sau khi chạy lại app, CloudWatch cho thấy backend vẫn chỉ dùng khoảng `0.02% CPU` và `5.20% memory`, nên cấu hình mới vẫn đủ headroom cho workload dev/demo.**
