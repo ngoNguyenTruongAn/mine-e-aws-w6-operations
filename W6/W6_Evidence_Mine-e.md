@@ -116,7 +116,7 @@ Workload Mine-e W6 gồm các thành phần chính:
 
 ```text
 Frontend:
-S3 static website bucket minie-fe-w6
+CloudFront
 
 Backend:
 ECS Fargate Service minie-backend-task-w6-service
@@ -148,7 +148,7 @@ Luồng truy cập chính:
 ```text
 User
   ↓
-S3 static frontend
+CloudFront
   ↓
 Application Load Balancer
   ↓
@@ -383,82 +383,78 @@ Với threshold 80%, alert sẽ kích hoạt khi actual cost vượt:
 
 
 
-# MH-COST-V-H — Cost Explorer / Service-level cost view
 
-## Mục tiêu
-
-Cost Explorer được dùng để xem breakdown chi phí theo service hoặc theo tag sau khi Cost Allocation Tags đã được active và Billing data đã được cập nhật.
-
-Cấu hình Cost Explorer mong muốn:
-
-```text
-Date range: This month hoặc Last 7 days
-Granularity: Daily
-Group by: Service
-Filter: Application=Mine-e hoặc CostCenter=G4 nếu tag đã active và propagation xong
-```
-
-## Lưu ý propagation
-
-Sau khi activate Cost Allocation Tags, AWS Billing có thể cần thời gian để tag xuất hiện trong Cost Explorer. Nếu chưa filter được ngay theo tag, nhóm có thể dùng service-level breakdown trước.
-
-## Evidence
-
-TODO: Chèn ảnh Cost Explorer grouped by Service nếu có.
-
-```md
-![Cost Explorer by service](./evidence-W6/mh-cost-v-cost-explorer-by-service.png)
-```
-
-TODO: Chèn ảnh Cost Explorer filter theo tag nếu đã dùng được.
-
-```md
-![Cost Explorer by tag](./evidence-W6/mh-cost-v-cost-explorer-by-tag.png)
-```
-
-Nếu Cost Explorer chưa có data ngay, ghi:
-
-```text
-Cost Allocation Tags were activated, but Billing/Cost Explorer data may need time to propagate. The team used Budget and service-level expected cost breakdown while waiting for tag-based cost data.
-```
-
----
 
 # MH-COST-V-I — Baseline cost breakdown
+### Bằng chứng Cost Explorer
 
-## Expected top cost drivers
+#### View 1: Chi phí theo ngày (Daily Granularity)
 
-Dựa trên kiến trúc redeploy của Mine-e W6, các cost driver chính dự kiến gồm:
+Dữ liệu được trích xuất từ **AWS Cost Explorer** với các tham số:
+- **Date Range**: 2026-03-25 — 2026-05-23
+- **Granularity**: Daily
+- **Accrued Total**: **$47.00**
 
-| Thứ tự | Cost driver | Lý do |
-|---:|---|---|
-| 1 | RDS MySQL | Database chạy liên tục |
-| 2 | NAT Gateway / EC2-Other | Private subnet cần outbound để ECS pull image, gửi logs và truy cập internet |
-| 3 | Application Load Balancer | Entry point public cho backend |
-| 4 | ECS Fargate | Backend container runtime |
-| 5 | S3 / CloudWatch | Lưu file media, logs, metrics, alarms |
+![Cost Explorer — Daily view, chi phí tích lũy $47.00, date range 2026-03-25 đến 2026-05-23](Screenshot/CostExplorer_FinOps.png)
 
-## Phân tích cost driver
+**Bảng chi phí theo ngày (trích xuất từ Cost Explorer):**
 
-### 1. RDS MySQL
+| Ngày | Chi phí |
+|------|---------|
+| May-18 | $0.02 |
+| May-19 | $5.41 |
+| May-20 | $20.44 |
+| May-21 | $20.43 |
+| May-22 | $0.00 |
+| May-23 (forecast) | $0.06 |
+| **Tổng tích lũy** | **$47.00** |
 
-RDS là cost driver quan trọng vì database chạy liên tục kể cả khi traffic thấp. Nhóm chọn RDS Single-AZ để giảm chi phí trong môi trường W6/dev.
+#### View 2: Chi phí theo tháng & Dự báo (Monthly Granularity + Forecasting)
 
-### 2. NAT Gateway / EC2-Other
+- **Date Range**: 2025-11-30 — 2026-05-31
+- **Granularity**: Monthly
+- **Accrued Total**: **$49.31**
+- **Forecast Total**: **$47.06**
 
-ECS task trong private subnet cần outbound internet để pull image, gửi logs hoặc truy cập endpoint bên ngoài. NAT Gateway có hourly charge và data processing charge, nên cần được theo dõi kỹ.
+![Cost Explorer — Monthly Forecasting view, Accrued Total $49.31, Forecast $47.06, May 2026 costs $46.52 với 80% prediction interval $46.97–$47.16](./Evidence/CostExplorer_FinOps.png)
 
-### 3. Application Load Balancer
+**Bảng chi phí theo tháng (trích xuất từ Cost Explorer):**
 
-ALB là entry point public cho backend. ALB phát sinh chi phí theo thời gian chạy và LCU.
+| Tháng | Chi phí |
+|-------|---------|
+| November 2025 | $0.00 |
+| December 2025 | $0.00 |
+| January 2026 | $1.51 |
+| February 2026 | $0.50 |
+| March 2026 | $0.40 |
+| April 2026 | $0.38 |
+| **May 2026** | **$46.52** |
+| **Forecast (May)** | **$47.06** |
 
-### 4. ECS Fargate
+**Dự báo AWS Forecast cho tháng 5/2026:**
+- **Costs thực tế (MTD)**: $46.52
+- **Costs mean estimate**: $47.06
+- **80% prediction interval**: $46.97 – $47.16
 
-ECS Fargate phát sinh chi phí theo vCPU, memory và thời gian chạy task. Nhóm để desired task count = 1 và bổ sung Cost Guard để scale down khi cần giảm cost.
+### Bài phân tích FinOps — Baseline Cost Observation
 
-### 5. S3 / CloudWatch
-
-S3 lưu media/object của ứng dụng. CloudWatch lưu logs, custom metrics, dashboards và alarms. Chi phí thường nhỏ hơn RDS/NAT/ALB nhưng vẫn cần theo dõi vì log hoặc media có thể tăng theo thời gian.
+> Sau khi deploy hệ thống mini-e trên vùng Virginia (`us-east-1`), dữ liệu từ **AWS Cost Explorer** cho thấy tổng chi phí tích lũy (Accrued Total) là **$49.31**, trong đó riêng tháng 5/2026 chiếm **$46.52** — tương ứng với giai đoạn triển khai Workshop W6. Hệ thống đang ở mức **32.87%** ngân sách trần $150, nằm trong ngưỡng an toàn.
+>
+> **Phân tích xu hướng chi phí:** Biểu đồ Monthly cho thấy chi phí gần như bằng 0 từ Nov-2025 đến Apr-2026 (tổng ~$2.79), sau đó tăng đột biến lên **$46.52** trong tháng 5 — tương ứng với thời điểm deploy hệ thống mini-e. AWS Forecast dự báo tổng chi phí tháng 5 sẽ đạt **$47.06** (80% CI: $46.97–$47.16), cho thấy chi phí đã gần ổn định và không có xu hướng tăng thêm.
+>
+> Nhóm chúng em đã xác định được **Top 3 nguồn phát sinh chi phí lớn nhất (Cost Drivers)** của hệ thống:
+>
+> 1. **Amazon RDS MySQL (~$10/ngày)**: Driver chi phí lớn nhất. Database `minie-mysql-prod` sử dụng instance class `db.m5.large` và bật **Multi-AZ** (chạy bản sao dự phòng tại `us-east-1b`), nhân đôi chi phí so với Single-AZ.
+>
+> 2. **Amazon ECS Fargate & ALB (~$7/ngày)**: Backend chạy **2 Tasks** song song trên Fargate đứng sau Load Balancer `alb-minie-prod` để đảm bảo High Availability.
+>
+> 3. **Amazon CloudFront & S3 (~$3/ngày)**: Phân phối frontend tĩnh (`minie-web-frontend`) qua CloudFront và lưu trữ media uploads (`media-s3-minie`).
+>
+> **Nhận xét & Đề xuất tối ưu hóa:**
+> Với forecast ~$47/tháng và chi phí đã gần ổn định, hệ thống vẫn nằm trong giới hạn $150. Tuy nhiên, để tối ưu chi phí:
+> - *Ngắn hạn*: Chuyển RDS sang **Single-AZ** và giảm instance class xuống `db.t3.medium` → tiết kiệm ~50% chi phí RDS.
+> - *Dài hạn*: Thêm S3 Lifecycle Policy cho bucket `media-s3-minie` để chuyển dữ liệu cũ sang Glacier → giảm chi phí lưu trữ.
+> - *Tắt tài nguyên khi không sử dụng*: Dừng ECS Tasks và RDS instance ngoài giờ workshop để tránh chi phí idle.
 
 ---
 
