@@ -422,7 +422,7 @@ Dashboard bao gồm các nhóm metric chính:
 | BudgetBot/W7 | UploadJobCreated, RowsParsed, RowsInserted, UploadJobSucceeded, UploadJobFailed | Theo dõi workflow nghiệp vụ upload-processing |
 
 Dashboard này giúp nhóm quan sát toàn bộ luồng từ frontend/API Gateway đến Lambda, SQS, RDS và custom workflow metrics. Khi alarm bật, nhóm có thể dùng dashboard để xác định nhanh lỗi nằm ở tầng API, backend, queue, database hay workflow nghiệp vụ.
-![CloudWatch Dashboard](./Evidence/CloudWatch%20Dashboard.jpg)
+![CloudWatch Dashboard-3](./Evidence/CloudWatch%20Dashboard-3.jpg)
 ## 9. Kết luận: Các cấu hình CloudWatch giúp gì cho dự án
 
 Các cấu hình CloudWatch trong BudgetBot giúp dự án chuyển từ trạng thái “chỉ biết app chạy hay lỗi” sang trạng thái có thể quan sát, cảnh báo và điều tra nguyên nhân theo từng tầng của kiến trúc.
